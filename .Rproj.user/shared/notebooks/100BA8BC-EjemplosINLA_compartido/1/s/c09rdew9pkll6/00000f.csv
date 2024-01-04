@@ -1,0 +1,1 @@
+"0","A <- inla.spde.make.A(mesh, loc = coords_rand)"

@@ -1,0 +1,2 @@
+"0","par(mfrow = c(2, 2))"
+"0","image(x = grid.projector$x, y = grid.projector$y, z = prd0.m, main = ""Media efecto espacial"")"

@@ -1,0 +1,8 @@
+"0","rango <- 100"
+"0","nu <- 1"
+"0","kappa <- sqrt((8*nu))/rango"
+"0","beta0 <- 10"
+"0","sigma2e <- 0.5"
+"0","sigma2u <- 2"
+"0",""
+"0","dmat <- as.matrix(dist(coords_rand)) # Matriz distancias"

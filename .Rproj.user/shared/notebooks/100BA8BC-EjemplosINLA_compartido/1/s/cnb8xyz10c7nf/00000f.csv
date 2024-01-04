@@ -1,0 +1,7 @@
+"0","spde <- inla.spde2.pcmatern("
+"0","  # Mesh and smoothness parameter"
+"0","  mesh = mesh, alpha = 2,"
+"0","  # P(practic.range < 50) = 0.1"
+"0","  prior.range = c(50, 0.1),"
+"0","  # P(sigma > 5) = 0.1"
+"0","  prior.sigma = c(5, 0.1)) "

@@ -1,0 +1,1 @@
+"0","image(x = grid.projector$x, y = grid.projector$y, z =  matrix(res.pred$summary.fitted.values$sd[igr], 101), main = ""SD mu"")"

@@ -1,0 +1,3 @@
+"0","res <- inla(y ~ 0 + beta0 + f(i, model = spde),"
+"0","            data = inla.stack.data(stack),"
+"0","            control.predictor = list(A = inla.stack.A(stack)))"
