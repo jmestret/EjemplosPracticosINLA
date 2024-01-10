@@ -1,1 +1,0 @@
-"0","image(x = grid.projector$x, y = grid.projector$y, z =  matrix(res.pred$summary.fitted.values$mean[igr], 101), main = ""Respuesta esperada"")"

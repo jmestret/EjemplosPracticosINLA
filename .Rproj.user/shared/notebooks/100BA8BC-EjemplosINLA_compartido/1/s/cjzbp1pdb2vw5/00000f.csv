@@ -1,7 +1,0 @@
-"0","stack <- inla.stack("
-"0","  data = list(y = datos$y),"
-"0","  A = list(A, 1),"
-"0","  effects = list(i = 1:spde$n.spde,"
-"0","                 beta0 = rep(1, nrow(datos))),"
-"0","  tag = ""est"""
-"0",")"

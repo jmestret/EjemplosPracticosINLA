@@ -1,2 +1,0 @@
-"0","mod_freq <- glm(quejas ~ offset(log(consultas)) + horas + residente + horas:residente"
-"0","                ,data = datos, family = poisson())"

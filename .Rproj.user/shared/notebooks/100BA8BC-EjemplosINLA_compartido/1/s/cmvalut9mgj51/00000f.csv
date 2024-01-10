@@ -1,5 +1,0 @@
-"0","grid.projector <- inla.mesh.projector("
-"0","  mesh,"
-"0","  xlim = c(0, 200), ylim = c(0, 200),"
-"0","  dims = c(101, 101)"
-"0",")"

@@ -1,1 +1,0 @@
-"0","igr <- inla.stack.index(stack_all, 'pred')$data"

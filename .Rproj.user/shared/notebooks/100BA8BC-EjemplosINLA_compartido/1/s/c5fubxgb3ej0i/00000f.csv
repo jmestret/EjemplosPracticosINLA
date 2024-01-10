@@ -1,4 +1,0 @@
-"0","prd0.m <- inla.mesh.project(grid.projector,"
-"0","                            res$summary.random$i$mean)"
-"0","prd0.s <- inla.mesh.project(grid.projector,"
-"0","                            res$summary.random$i$sd)"

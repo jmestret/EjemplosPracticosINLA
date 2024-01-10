@@ -1,1 +1,0 @@
-"0","datos <- read.table(""datos/quejas.dat"", header = T, sep="""", stringsAsFactors = T)"
