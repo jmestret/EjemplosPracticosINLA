@@ -1,6 +1,6 @@
 ---
 title: "Documento Colaborativo: Ejemplos Prácticos de Modelos Bayesianos con INLA en R"
-author: "Jorge Mestre (añadir nombres)"
+author: "Jorge Mestre, Juan Vitoria, (añadir nombres)"
 date: "Diciembre de 2023"
 output:
   html_document:
@@ -24,11 +24,14 @@ library(INLA)
 library(jagsUI)
 library(R2WinBUGS)
 library(sf)
-
+library(vctrs)
+library(tidyr)
 library(tidyverse)
 library(gridExtra)
 library(flextable)
 library(fields)
+library(dplyr)
+library(glmm)
 ```
 
 # Datos Bernoulli {.tabset}
@@ -531,7 +534,7 @@ plot(mesh)
 points(coords_rand, col = "red", pch = 16)
 ```
 
-> ℹ️ La sección X proporciona más detalles sobre cómo construir un mesh (HACER ESTO). Además, se puede obtener más información [aquí](https://becarioprecario.bitbucket.io/spde-gitbook/ch-intro.html#sec:mesh)
+> ℹ️  Más información obre cómo construir un mesh [aquí](https://becarioprecario.bitbucket.io/spde-gitbook/ch-intro.html#sec:mesh)
 
 El modelo SPDE se puede definir con la función `inla.spde2.matern()`, que utiliza los argumentos `mesh` y `alpha` relacionados con la suavización del parámetro. Esta parametrización es flexible y permite controlar los parámetros definiendo la desviación estándar marginal y el rango. También podríamos definirla utilizando las [PC-priors](https://becarioprecario.bitbucket.io/spde-gitbook/ch-INLA.html#sec:intropc) mediante la función `inla.spde2.pcmatern()`.
 
@@ -673,5 +676,432 @@ image(x = grid.projector$x, y = grid.projector$y, z =  matrix(res.pred$summary.f
 image(x = grid.projector$x, y = grid.projector$y, z = prd0.s, main = "SD efecto espacial")
 image(x = grid.projector$x, y = grid.projector$y, z =  matrix(res.pred$summary.fitted.values$sd[igr], 101), main = "SD mu")
 ```
+
+# Datos Binomiales(Práctica 7 MJB) {.tabset}
+
+Vamos a analizar un banco de datos que contiene las *defunciones por cáncer de estómago* en 84 ciudades de *Missouri*, además de la población de cada una de ellas.
+
+```{r}
+#Cargamos los datos
+load("datos/meta (1).Rdata")
+datos_cancer <- cbind(N, y)
+datos_cancer <- as.data.frame(datos_cancer)
+
+#Resumen de los datos
+summary(datos_cancer)
+
+```
+
+- **Variable respuesta**: $Y_i$ es la variable que nos dice el número de defunciones por cáncer respecto del total de la población. ($i = 1, ..., 84$)
+
+- En este caso no disponemos de ninguna covariable que nos ayude a explicar la distribución de nuestro modelo.
+
+- Deseamos estimar la tasa de mortalidad (por 100000 habitantes) para cada una de las ciudades, por lo que consideramos el siguiente modelo estadístico:
+
+$$
+Y_i \sim Bin(\pi_i,n_i), \quad i = 1, ..., 84
+$$
+- Utilizamos la transformación logit para relacionar el predictor lineal con la respuesta media:
+
+$$
+log \Big( \frac{\pi_i}{1 - \pi_i} \Big) = logit(\pi_i) = a_i
+$$
+- El predictor lineal consiste únicamente en el efecto a, el cual modelizaremos como efecto aleatorio normal, ya que al modelizarlo como efecto fijo de cada ciudad o como efecto fijo común perderíamos información relevante sobre la muestra.
+
+## Bayesiano con INLA
+
+```{r}
+#Calculamos la tasa esperada para comparar los resultados
+pi <- datos_cancer$y/datos_cancer$N
+
+#Introducimos el efecto aleatorio
+mod_inla_cancer <- inla(y ~ 1+f(pi, model = "iid"),
+     family = "binomial",
+     Ntrials = N,
+     #El argumento Ntrials es necesario en la binomial
+     
+     control.compute = list(dic = TRUE, waic = TRUE, return.marginals.predictor = TRUE),
+     #Estos argumentos nos servirán para la comparación de modelos
+     #El argumento return.marginals nos ayudará a graficar pi
+     control.predictor = list(compute = TRUE),
+     data = datos_cancer)
+
+summary(mod_inla_cancer)
+```
+
+El intercept aparece por defecto en el modelo con la transformación presente en el link (en este caso logit), los fitted values aparecen en escala original.
+
+Ahora utilizaremos un tipo de prior distinta, muy utilizada en la modelización con INLA, llamadas en su conjunto *Penalized Complexity Priors* o PC-priors.
+
+- Estas priors penalizan la distancia hacia un modelo base al menos que haya evidencia en su contra (*Princpio de Parsimonia*).
+
+- Se definen estableciendo probabilidades sobre los parámetros del modelo en la escala adecuada.
+
+**Ejemplo**
+
+Para la precisión($\tau$) se utilizan los parámetros u y $\alpha$, tal que:
+
+$$
+Prob(\sigma >u)= \alpha
+$$
+En este caso utilizaremos una PC prior para la precisión de nuestro efecto aleatorio.
+
+```{r}
+#Probando con diferentes priors
+mod_inla_cancer_2 <- inla(y ~ 0+f(pi, model = "iid", hyper = list(
+prec = list(
+prior = "pc.prec",
+param = c(5, 0.01)))),
+     family = "binomial",
+     Ntrials = N,
+#El argumento Ntrials es necesario en la binomial
+
+     control.compute = list(dic = TRUE, waic = TRUE, return.marginals.predictor = TRUE),
+#Estos argumentos nos servirán para la comparación de modelos
+     #El argumento return.marginals nos ayudará a graficar pi
+     control.predictor = list(compute = TRUE),
+     data = datos_cancer)
+
+summary(mod_inla_cancer_2)
+```
+
+## Bayesiano con WinBUGS
+
+```{r, eval=FALSE}
+datos_cancer_winb <- list(y = y, N = N, n = length(y))
+p.star <- sum(y)/sum(N)
+logit.p.star <- log(p.star/(1 - p.star))
+mod_cancer_winb <- function() {
+  for (i in 1:n) {
+    y[i] ~ dbin(pi[i], N[i])
+    logit(pi[i]) <- mu + theta[i]
+    theta[i] ~ dnorm(0, tau)
+    # Probabilidad de exceso de riesgo
+    
+    p[i] <- step(theta[i])
+    # tasa por 100.000 habitantes
+    
+    tasa[i] <- pi[i] * 1e+05
+  }
+  #distribuciones iniciales
+  
+  mu ~ dflat()
+  tau <- pow(sd.theta, -2)
+  sd.theta ~ dunif(0, 100)
+}
+# Modelo efectos aleatorios
+
+iniciales_cancer_winb <- function() {
+  list(mu = rnorm(1, logit.p.star, 1), theta = rnorm(84, 0, 1), sd.theta = runif(1, 0, 2))
+}
+
+param <- c("pi")
+set.seed(123)
+resul_mod_cancer_winb <- bugs(data = datos_cancer_winb, inits = iniciales_cancer_winb, parameters = param, model = mod_cancer_winb,
+                n.burnin = 1000, n.iter = 5000, bugs.directory = "C:/Users/juanv/OneDrive/Escritorio/Master Bioestadística/Modelización avanzada/Modelos jerárquicos Bayesianos/Prácticas/WinBUGS14")
+
+save(resul_mod_cancer_winb, file = "modelos/mcmc_cancer.RData")
+
+head(round(resul_mod_cancer_winb$summary,6))
+
+```
+```{r}
+load("modelos/mcmc_cancer.RData")
+# Resumen de los resultados
+head(round(resul_mod_cancer_winb$summary, 6))
+```
+
+# {.unlisted .unnumbered}
+
+**Comparación**
+
+A continuación, compararemos los resultados de los modelos, en concreto, la proporción de enfermos de cáncer de las 6 primeras ciudades, a modo de muestra:
+
+```{r class.source = 'fold-hide'}
+# Visualización de resultados
+ 
+#Extraemos las proporciones de cada ciudad
+
+#INLA
+pi_inla <- mod_inla_cancer$marginals.fitted.values
+pi_inla_2 <- mod_inla_cancer_2$marginals.fitted.values
+
+#WinBUGS
+pi_winb <- resul_mod_cancer_winb$sims.list$pi
+winb_cancer_list <- list()
+for (i in 1:84) {
+winb_cancer_list[[i]] <- pi_winb[, i]  
+}
+
+#Representamos conjuntamente las distribuciones de los 3 modelos
+plist_2 <- list()
+for (i in 1:6){
+  pgg <- ggplot() +
+    geom_density(data = data.frame(x = winb_cancer_list[[i]]), aes(x), linewidth=1, color = "#4FA3AB", linetype = "dashed") +
+    geom_line(data = data.frame(inla.smarginal(pi_inla[[i]])), aes(x, y), linewidth = 1, color = "#F6733A", linetype = "dashed") +
+    geom_line(data = data.frame(inla.smarginal(pi_inla_2[[i]])), aes(x, y), linewidth = 1, color = "#00FF00", linetype = "dashed")
+    ggtitle(names(pi_inla)[i]) +
+    theme_bw()
+  
+  plist_2[[i]] <- pgg
+}
+
+n_2 <- length(plist_2)
+nCol_2 <- ceiling(sqrt(n_2))
+do.call("grid.arrange", c(plist_2, ncol=nCol_2, top = "WinBUGS: Azul, INLA: Naranja, INLA PC: Verde"))
+```
+
+Podría parecer en este caso que las distribuciones a posteriori de Inla y WinBUGS no son todo lo parecidas que deberían, pero a una escala tan pequeña se pueden dar estas diferencias. 
+
+Destaca que las distribuciones a posteriori de WinBUGS son más apuntadas, seguramente porque es un método exacto, frente a una aproximación como INLA.
+
+En cuanto a los 2 modelos de INLA con diferentes priors, vemos que la diferencia es insignificante.
+
+A continuación observamos los estimadores puntuales de las distribuciones estimadas en los modelos bayesianos.
+
+```{r}
+params_2 <- cbind(resul_mod_cancer_winb$summary[c(1:9), c(1, 3, 7)],
+          mod_inla_cancer$summary.fitted.values[c(1:9), c(1, 3, 5)],
+mod_inla_cancer_2$summary.fitted.values[c(1:9), c(1, 3, 5)])
+colnames(params_2) <- paste0(rep(c("WinBUGS_", "INLA 1(no PC)_", "INLA 2(PC)_"), each = 3), c("est/mean", "2.5%", "97.5%"))
+
+header_df_2 <- tibble(key = colnames(params_2)) %>% 
+  separate(col = key, into = c("Group1", "Group2"), sep = "_", remove = FALSE, fill = "left")
+
+params_2 %>% 
+  mutate(across(where(is.numeric), round, 6)) %>% 
+  rownames_to_column("Coefficients") %>% 
+  flextable() %>% 
+  set_header_df(mapping = header_df_2, key = "key") %>% 
+  merge_h(part = "header") %>% 
+  theme_booktabs() 
+  
+
+```
+Como se puede observar, las diferencias son ínfimas entre todos los modelos bayesianos.
+
+# Modelo Poisson con Random Walk (Tarea 8 MJB) {.tabset}
+
+En este caso nuestro banco de datos contiene información sobre la mortalidad por enfermedades congénitas en hombres en España.
+
+Disponemos del número de defunciones mensuales por esta
+causa durante el periodo 1999-2008.
+
+```{r}
+load("datos/congenitas (1).Rdata")
+
+#Añadimos una variable con los ID ordenados para poder modelizar el random walk
+tiempo <- seq(1, 120)
+datos_mort <- as.data.frame(cbind(tiempo, mort))
+```
+
+- **Variable respuesta**: $Y_i$ es la variable que nos dice el número de defunciones mensuales por enfermedades congénitas ($i = 1, ..., 120$)
+
+- En este caso no disponemos de ninguna covariable que nos ayude a explicar la distribución de nuestro modelo.
+
+- Deseamos estimar el número de defunciones esperadas, por lo que planteamos el siguiente modelo:
+
+$$
+Y_i \sim Poisson(\lambda_i), \quad i = 1, ..., 200
+$$
+Donde $\lambda_i$ representa la tasa de ocurrencia de la muerte por esta causa en cada mes estudiado.
+
+- Utilizamos la transformación log para relacionar el predictor lineal con la respuesta media:
+
+$$
+log(\lambda_i) = a_i
+$$
+Un modelo de efectos aleatorios sería lo adecuado para la modelización, ya que las defunciones en todos los meses deberían seguir la misma distribución.
+
+Pero, además de esto, tiene sentido que las observaciones sean dependientes entre sí, en concreto las de meses cercanos, por lo que utilizaremos Random Walk para modelizar esta dependencia.
+
+El efecto aleatorio dependiente $a_i$ seguirá una distribución:
+
+$$
+a_i \sim Normal(\mu_i,\sigma), \quad i = 1, ..., 200
+$$
+Con predictor lineal:
+
+$$
+\mu_i= a_{i-1}
+$$
+
+- Para el *Random Walk de primer orden*, y:
+
+$$
+\mu_i= a_{i-1}+(a_{i-1}-a_{i-2})
+$$
+- Para el *Random Walk de segundo orden*
+
+## Bayesiano con  INLA
+
+```{r}
+#Especificación del random walk de primer orden
+mod_mort_inla_rw1 <- inla(mort ~ f(tiempo, model = "rw1"),
+         family = "poisson",
+         control.compute = list(dic = TRUE, waic = TRUE, return.marginals.predictor = TRUE),
+         control.predictor = list(compute = TRUE),
+         data = datos_mort)
+summary(mod_mort_inla_rw1)
+
+#Especificación del random walk de segundo orden
+mod_mort_inla_rw2 <- inla(mort~f(tiempo, model = "rw2"),
+         family = "poisson",
+         control.compute = list(dic = TRUE, waic = TRUE, return.marginals.predictor = TRUE),
+         control.predictor = list(compute = TRUE),
+         data = datos_mort)
+summary(mod_mort_inla_rw2)
+```
+
+## Bayesiano con WinBUGS
+```{r, eval=FALSE}
+mod_mort_winb_rw1 <- function() {
+  for (i in 1:120) {
+    mort[i] ~ dpois(media[i])
+    log(media[i]) <- a[i]
+  }
+  a[1] ~ dflat()
+  for (i in 2:120) {
+    a[i] ~ dnorm(a[i - 1], tau.a)
+  }
+  tau.a <- pow(sd.a, -2)
+  sd.a ~ dunif(0, 100)
+}
+
+# Llamada al modelo RW1
+datos_mort <- list(mort = mort)
+inits_mod_mort_winb_rw1 <- function() {
+  list(a = rnorm(120), sd.a = runif(1, 0, 5))
+}
+param_3 <- c("media", "sd.a")
+# Elevamos el número de iteraciones habituales ya que la convergencia de
+# este modelo resulta problematica
+
+resul_mod_mort_winb_rw1 <- bugs(data = datos_mort, inits = inits_mod_mort_winb_rw1, param = param_3, model.file = mod_mort_winb_rw1,
+                  n.iter = 10000, n.burnin = 2000, bugs.directory = "C:/Users/juanv/OneDrive/Escritorio/Master Bioestadística/Modelización avanzada/Modelos jerárquicos Bayesianos/Prácticas/WinBUGS14")
+head(round(resul_mod_mort_winb_rw1$summary, 4))
+
+save(resul_mod_mort_winb_rw1, file = "modelos/mcmc_mort_rw1.RData")
+
+# Modelo Random Walk de segundo orden
+mod_mort_winb_rw2 <- function() {
+for (i in 1:120) {
+mort[i] ~ dpois(media[i])
+log(media[i]) <- a[i]
+}
+a[1] ~ dflat()
+a[2] ~ dflat()
+for (i in 3:120) {
+a[i] ~ dnorm(media.a[i], tau.a)
+media.a[i] <- a[i - 1] + (a[i - 1] - a[i - 2])
+}
+tau.a <- pow(sd.a, -2)
+sd.a ~ dunif(0, 100)
+}
+inits_mod_mort_winb_rw2 <- function() {
+list(a = rnorm(120, log(mean(mort), 0.1)), sd.a = runif(1, 0, 5))
+}
+resul_mod_mort_winb_rw2 <- bugs(data = datos_mort, inits = inits_mod_mort_winb_rw2, param = param_3, model.file = mod_mort_winb_rw2,
+n.iter = 5e+05, n.burnin = 50000,bugs.directory = "C:/Users/juanv/OneDrive/Escritorio/Master Bioestadística/Modelización avanzada/Modelos jerárquicos Bayesianos/Prácticas/WinBUGS14")
+head(round(resul_mod_mort_winb_rw2$summary, 2))
+
+save(resul_mod_mort_winb_rw2, file = "modelos/mcmc_mort_rw2.RData")
+
+```
+```{r}
+load("modelos/mcmc_mort_rw1.RData")
+# Resumen de los resultados
+head(round(resul_mod_mort_winb_rw1$summary, 4))
+
+load("modelos/mcmc_mort_rw2.RData")
+# Resumen de los resultados
+head(round(resul_mod_mort_winb_rw1$summary, 4))
+```
+
+La convergencia de los parámetros del random walk 2 no es buena incluso con un elevado número de interacciones, pero, por ahorrarnos tiempo, tomaremos estos valores de ejemplo, ya que un modelo con más interacciones tardaría demasiado.
+
+# {.unlisted .unnumbered}
+
+**Comparación**
+
+Representamos el número de hombres afectados por enfermedades congénitas en los 6 primeros meses.
+
+```{r class.source = 'fold-hide'}
+# Visualización de resultados
+ 
+#Extraemos las proporciones de cada ciudad
+
+#INLA
+pois_inla_1 <- mod_mort_inla_rw1$marginals.fitted.values
+pois_inla_2 <- mod_mort_inla_rw2$marginals.fitted.values
+
+#WinBUGS
+pois_winb1 <- resul_mod_mort_winb_rw1$sims.list$media
+pois_winb2 <- resul_mod_mort_winb_rw2$sims.list$media
+winb_mort1_list <- list()
+for (i in 1:120) {
+winb_mort1_list[[i]] <- pois_winb1[, i]  
+}
+winb_mort2_list <- list()
+for (i in 1:120) {
+winb_mort2_list[[i]] <- pois_winb2[, i]  
+}
+
+#Representamos conjuntamente las distribuciones de los 3 modelos
+plist_3 <- list()
+for (i in 1:6){
+  pgg <- ggplot() +
+    geom_density(data = data.frame(x = winb_mort1_list[[i]]), aes(x), linewidth=1, color = "#4FA3AB", linetype = "dashed") +
+    geom_density(data = data.frame(x = winb_mort2_list[[i]]), aes(x), linewidth=1, color = "#FF0000", linetype = "dashed") +
+    geom_line(data = data.frame(inla.smarginal(pois_inla_1[[i]])), aes(x, y), linewidth = 1, color = "#F6733A", linetype = "dashed") +
+    geom_line(data = data.frame(inla.smarginal(pois_inla_2[[i]])), aes(x, y), linewidth = 1, color = "#00FF00", linetype = "dashed")
+    ggtitle(names(pois_inla_1)[i]) +
+    theme_bw()
+  
+  plist_3[[i]] <- pgg
+}
+
+n_3 <- length(plist_3)
+nCol_3 <- ceiling(sqrt(n_3))
+do.call("grid.arrange", c(plist_3, ncol = nCol_3, top = "WinBUGS RW1: Azul,WinBUGS RW2: Rojo INLA RW1: Naranja, INLA RW2: Verde"))
+```
+
+En el gráfico observamos que los parámetros de los modelos que incluyen una dependencia tipo *Random walk* tienen intervalos de credibilidad cada vez más pequeños, apuntandose sus gráficas progresivamente.
+
+Las primeras observaciones tienen menos credibilidad en los modelos con RW porque no tienen observaciones anteriores de las que extraer información.
+
+Los intervalos de credibilidad disminuyen hasta que se estabilizan, antes en el RW1 que en el RW2. Esto es porque el RW2 incluye información de las 2 observaciones anteriores(más credibilidad), mientras que el RW1 sólo incluye información de la observación inmediatamente anterior. 
+
+Las diferencias entre INLA y WinBUGS son contradictorias:
+
+- En los modelos RW1, INLA presenta mayor credibilidad que Winbugs.
+- En los modelos RW2 es WinBUGS quien presenta mayor credibilidad.
+
+En el ejemplo anterior veíamos que los intervalos de WinBUGS eran más precisos seguramente por ser un método exacto y no una aproximación, pero ahora, con un modelo más complejo y problemas de convergencia vemos que no siempre es así.
+
+
+```{r}
+params_3 <- cbind(resul_mod_mort_winb_rw1$summary[c(1:9), c(1, 3, 7)],
+            resul_mod_mort_winb_rw2$summary[c(1:9), c(1, 3, 7)],      
+          mod_mort_inla_rw1$summary.fitted.values[c(1:9), c(1, 3, 5)],
+mod_mort_inla_rw2$summary.fitted.values[c(1:9), c(1,3,5)])
+colnames(params_3) <- paste0(rep(c("WinBUGS RW1_", "WinBUGS RW2_", "INLA RW1_", "INLA RW2_"), each = 3), c("est/mean", "2.5%", "97.5%"))
+
+header_df_3 <- tibble(key = colnames(params_3)) %>% 
+  separate(col = key, into = c("Group1", "Group2"), sep = "_", remove = FALSE, fill = "left")
+
+params_3 %>% 
+  mutate(across(where(is.numeric), round, 1)) %>% 
+  rownames_to_column("Coefficients") %>% 
+  flextable() %>% 
+  set_header_df(mapping = header_df_3, key = "key") %>% 
+  merge_h(part = "header") %>% 
+  theme_booktabs() 
+
+```
+
+Estos resultados numéricos confirman todo lo comentado en la observación gráfica.
+
+
 
 
