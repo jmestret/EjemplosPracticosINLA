@@ -1,6 +1,6 @@
 ---
 title: "Documento Colaborativo: Ejemplos Prácticos de Modelos Bayesianos con INLA en R"
-author: "Jorge Mestre, Juan Vitoria, (añadir nombres)"
+author: "Jorge Mestre, Juan Vitoria, Silvia Rasero"
 date: "Diciembre de 2023"
 output:
   html_document:
@@ -1102,6 +1102,323 @@ params_3 %>%
 
 Estos resultados numéricos confirman todo lo comentado en la observación gráfica.
 
+
+# Tarea 6 - Datos Binomiales 2 (Tarea Final MJB) {.tabset}
+
+
+Nos encontramos ante datos epidemiológicos de tipo veterinario. Las observaciones corresponden a las distintas visitas que se han llevado a cabo a distintas granjas, en las que se han tomado distintas muestras de vacas. En las muestras vacunas se ha valorado la presencia de pleuroneumonía bovina contagiosa, una enfermedad contagiosa que concluye en el sacrificio del animal. 
+Por tanto:
+
+- Variable respuesta: número de incidentes en cada muestra m.
+- El parámetro de interés será la probabilidad de presencia de la enfermedad en la vaca.
+
+Se propone resolver los apartados utilizando INLA para complementar el ejercicio propuesto a resolver en la asignatura de MJB usando métodos MCMC (en este caso, WinBUGS).
+
+1. Modelizar la relación entre la probabilidad de encontrar animales infectados (incidencia de la enfermedad) y el periodo de estudio. Considera para este estudio la variable periodo como una variable numérica y considera su efecto de forma lineal dentro del predictor lineal correspondiente. ¿Encuentras que el periodo ha tenido un efecto significativo sobre la incidencia de la enfermedad? ¿De qué forma influye?
+
+Se plantea un modelo en el que la variable respuesta va a seguir una distribución binomial (número de incidentes de una muestra total), en el que la probabilidad de que haya presencia de la enfermedad ($\pi$) se relacionará con el predictor lineal mediante el *logit*:
+
+$$ incidentes_{i} \sim Binomial (\pi_{i},muestra_{i})$$,
+$$ logit(\pi_{i})= \beta_{0}+\beta_{1} periodo_{i}$$
+
+```{r}
+#cargamos los datos
+load("./datos/EpiGranjas.Rdata")
+granjas <- EpiGranjas
+```
+
+
+
+## Modelo 1 en WinBUGS
+
+Se propone el modelo en bayesiano, dándole distribuciones previas no informativas a los coeficientes (no hay información previa). La variable periodo se mantiene como variable numérica en este apartado.
+
+```{r,eval=FALSE}
+
+granjas$periodo <- as.numeric(granjas$periodo)
+
+
+
+modgranjas1 <- function(){
+
+  # Verosimilitud
+
+  for (i in 1:n) {
+
+    incidentes[i]~ dbin(p[i],muestra[i])
+
+    #predictor lineal
+
+    logit(p[i]) <- beta0+beta1*periodo[i]
+
+  }
+
+  #distribuciones iniciales
+
+  beta0 ~ dflat()
+
+  beta1 ~ dflat()
+  
+  Pbeta1 <- step(beta1)
+
+}
+
+datosgranjas1<- list(n=dim(granjas)[1], incidentes=granjas$incidentes, muestra=granjas$muestra, periodo=granjas$periodo)
+
+pargranjas1 <- list("beta0","beta1","Pbeta1")
+
+init.granjas1 <- function(){
+
+  list(beta0 = rnorm(1),beta1=rnorm(1))
+
+}
+
+res.granjas1 <- bugs(data=datosgranjas1,inits=init.granjas1,par=pargranjas1,model=modgranjas1)
+
+save(res.granjas1,file="./modelos/res.granjas1.RData")
+```
+
+
+```{r}
+load("./modelos/res.granjas1.RData")
+res.granjas1$summary
+res.granjas1$DIC
+```
+
+Viendo el resumen del modelo, podemos concluir que el periodo tiene un efecto negativo significativo en la incidencia de la enfermedad. Por cada aumento de una unidad en el periodo, los *odds* de la incidencia se multipilica por exp(-0.55), con un intervalo de credibilidad al 95% de beta1 de (-0.78,-0.34). Se observa que la convergencia del modelo es óptima (tanto los Rhats, como las iteraciones efectivas son aceptables para los coeficientes).
+
+
+
+## Modelo 1 en INLA
+
+Se plantea lo mismo, pero en INLA. Al ser una binomial, se añade "Ntrials=muestra" como argumento de la función *inla()* para incluir la m en el modelo. Hay que tener en cuenta que las previas del modelo en WinBUGS y en INLA no son las mismas (en INLA, las previas, en este caso, las automatiza la función usada), por lo que comparar entre un modelo y otro no es del todo correcto.
+
+```{r}
+granjas$periodo <- as.numeric(granjas$periodo)
+m1.granjas <- inla(formula=incidentes~1+periodo,family="binomial", Ntrials=granjas$muestra,
+
+quantiles = c(0.025, 0.975), control.compute = list(dic = TRUE,waic=T, cpo=T),data = granjas)
+
+```
+
+
+```{r}
+m1.granjas$summary.fixed
+
+m1.granjas$dic$dic
+```
+De todas formas, en estos modelos tan sencillos no debería variar mucho de uno a otro. Así, vemos que el efecto del periodo tiene un efecto negativo y significativo, con un $\beta_{1}$= -0.57 y un intervalo de credibilidad al 95% de (-0.80,-0.35).
+
+# {.tabset}
+
+
+2. Sospechamos que la relación periodo-incidencia pudiera tener una relación tipo no lineal. Para
+evaluar esta hipótesis considera la variable periodo como categoríca, empleando como valor de
+referencia el primer periodo. ¿Encuentras diferencias significativas entre el primer periodo
+y los restantes? ¿Qué estrategia de modelización te parece más adecuada para la variable
+periodo, su tratamiento como variable numérica o categórica?
+
+
+Se propone el mismo modelo anterior, pero considerando la variable explicativa referida al periodo como factor (de 4 niveles):
+
+$$ incidentes_{i} \sim Binomial (\pi_{i},muestra_{i})$$,
+$$ logit(\pi_{i})= \beta_{0}+\beta_{1} periodo_{2}+ \beta_{2}periodo_{3}+\beta_{3}periodo_{4} $$
+
+## Modelo 2 en WinBUGS
+
+
+Se plantea el modelo:
+
+```{r, eval=FALSE}
+
+modgranjas2 <- function(){
+
+  #Verosimilitud
+for (i in 1:n) {
+    incidentes[i]~ dbin(p[i],muestra[i])
+    #predicción lineal
+     logit(p[i]) <- beta0+beta1[periodo[i]]
+  } 
+
+  #distribuciones iniciales y restricción Corner:
+
+  beta0 ~ dflat()
+
+  beta1[1]<- 0
+
+  beta1[2] ~ dflat()
+
+  beta1[3] ~ dflat()
+
+  beta1[4] ~ dflat()
+
+  Pbeta12 <- step(beta1[2])
+
+  Pbeta13 <- step(beta1[3])
+
+  Pbeta14 <- step(beta1[4])
+
+}
+datosgranjas2<- list(n=dim(granjas)[1], incidentes=granjas$incidentes, muestra=granjas$muestra, periodo=granjas$periodo)
+
+pargranjas2 <- list("beta0","beta1","Pbeta12","Pbeta13","Pbeta14")
+
+init.granjas2 <- function(){
+  list(beta0 = rnorm(1),beta1=c(NA, rnorm(3)))
+}
+res.granjas2 <- bugs(data=datosgranjas2,inits=init.granjas2,par=pargranjas2,model=modgranjas2)
+save(res.granjas2,file="./modelos/res.granjas2.RData")
+
+
+```
+
+```{r}
+load("./modelos/res.granjas2.RData")
+res.granjas2$summary
+res.granjas2$DIC; res.granjas1$DIC
+```
+
+Este segundo modelo también cumple con una buena convergencia de las cadenas markovianas. Se ha aplicado una restricción tipo corner en la variable "periodo".
+Observando los resultados del modelo, podemos decir que sí hay diferencias significativas  entre el primer periodo (referencia) y los demás. Respecto al periodo 1, los demás periodos tienen un efecto negativo (a mayor periodo, mayor efecto negativo). Parece que estudiar los periodos de tiempo como un factor es mejor manera de estudiar la relación respecto a la incidencia de la enfermedad. Además, fijándonos en el criterio DIC, mejora un poco el ajuste respecto al primer modelo.
+
+
+## Modelo 2 en INLA.
+
+Se plantea el mismo modelo usando INLA. Se observan prácticamente los mismos resultados comentados. El criterio DIC para comparar el ajuste se reduce respecto al modelo anterior.
+
+```{r}
+granjas$periodo <- as.character(granjas$periodo)
+
+m2.granjas <-inla(formula=incidentes~1+periodo,family="binomial", Ntrials=granjas$muestra,
+quantiles = c(0.025, 0.975),
+control.compute = list(dic = TRUE,waic=T, cpo=T),
+data = granjas)
+
+summary(m2.granjas)
+m2.granjas$dic$dic; m1.granjas$dic$dic
+```
+
+
+# {.tabset}
+
+3. Los datos del banco de datos corresponden a distintas granjas, factor que hemos ignorado hasta ahora en la modelización. Contempla la modelización del efecto de la granja en el modelo que te parezca más oportuno de los que hayas ajustado hasta ahora.
+
+Se plantea un modelo en el que se incluye cada granja (hay 15 en total) como un efecto aleatorio. Así se conseguirá que todas las granjas compartan información (seguirán la misma distribución).
+
+Así,
+
+$$ incidentes_{i} \sim Binomial (\pi_{i},muestra_{ij}),      i=1,..., 56; j=1,...,15$$, 
+donde $\pi_{i}$ se relaciona mediante el *logit* con el predictor lineal:
+$$ logit(\pi_{i})= \beta_{0}+\beta_{1} periodo_{2}+ \beta_{2}periodo_{3}+\beta_{3}periodo_{4} + granja_{j} $$
+
+## Modelo 3 en WinBUGS.
+
+
+```{r,eval=FALSE}
+
+granjas$periodo <- as.numeric(granjas$periodo);granjas$granja <- as.numeric(granjas$granja)
+
+modgranjas3 <- function(){
+  for (i in 1:n){
+  incidentes[i] ~ dbin(p[i], muestra[i])
+  logit(p[i]) <- beta0 + beta1[periodo[i]] + beta2[granja[i]]
+  }
+
+  beta0 ~ dflat()
+  beta1[1] <- 0
+  for (j in 2:4){
+  beta1[j] ~ dflat()
+  Pbeta1[j] <- step(beta1[j])
+  }
+
+  for (k in 1:15){
+  beta2[k] ~ dnorm(0, tau.a)
+  Pbeta2[k] <- step(beta2[k])
+  }
+
+  for (l in 1:15){
+  Pgranjamayor[l] <- step(beta2[l]-mean(beta2[]))
+  }
+  tau.a <- pow(sd.a,-2)
+  sd.a ~ dunif(0, 100)
+  a ~ dnorm(0, tau.a)
+}
+
+inic3 <- function(){
+  list(beta0=rnorm(1,0,10), beta1=c(NA, rnorm(3,0,10)), beta2=rnorm(15,0,10), sd.a=runif(1))
+}
+
+datosgranjas3 <- list(incidentes=granjas$incidentes, n=dim(granjas)[1], muestra=granjas$muestra, periodo=granjas$periodo,granja=granjas$granja)
+
+param3 <- c("beta0","beta1","Pbeta1","beta2","Pbeta2","Pgranjamayor","sd.a")
+
+res.granjas3 <- bugs(data = datosgranjas3, inits = inic3, parameters = param3, model = modgranjas3, 
+
+             n.iter = 10000, n.burnin = 4000,  debug = T,bugs.seed=1)
+
+save(res.granjas3,file="./modelos/res.granjas3.RData")
+
+
+```
+
+```{r}
+load("./modelos/res.granjas3.RData")
+head(res.granjas3$summary)
+res.granjas3$DIC
+```
+
+Basándonos en el criterio DIC, el cual evalúa la complejidad y el ajuste del modelo, vemos que el tercer modelo (efecto aleatorio de las granjas) tiene un DIC menor que el del modelo del apartado anterior (187 frente a 208). Por tanto, es bastante aconsejable incluir este efecto, ya que conseguimos considerablemente mejorar el ajuste del modelo.
+
+## Modelo 3 en INLA
+
+Al incluir un efecto aleatorio, el campo latente gaussiano se completará con dicho efecto aleatorio de la granja, con su precisión ($\tau_{granja_{j}}$) como hiperparámetro:
+
+$$granja_{j} \sim N(0,\tau_{granja_{j}})$$
+Así, se añade el efecto aleatorio dentro de la función INLA() con el parámetro model="iid". Se ha usado una PC prior (Penalized Complexity Prior) como previa para el hiperparámetro. 
+
+```{r}
+granjas$periodo <- as.character(granjas$periodo);granjas$granja <- as.character(granjas$granja)
+
+m3.granjas <- inla(formula=incidentes~1+periodo+f(granja,model="iid",hyper = list(prec = list(prior = "pc.prec",
+param = c(5, 0.01)))),family="binomial", Ntrials=granjas$muestra,
+
+quantiles = c(0.025, 0.975),
+
+control.compute = list(dic = TRUE,waic=T, cpo=T),
+
+data = granjas)
+
+summary(m3.granjas); m3.granjas$dic$dic
+```
+
+Se observan, al igual que con BUGS, resultados notablemente mejores al incluir el efecto aleatorio, con un DIC de 187. 
+
+# {.unlisted .unnumbered}
+
+## Comparación de modelos para el mejor ajuste (INLA)
+
+A modo resumen, se comparan en la siguiente tabla los criterios DIC para el ajuste y el WAIC y LCPO para estudiar la capacidad predictiva de los tres modelos:
+
+```{r}
+
+seleccion.granjas.inla <- data.frame(DIC  = c(m1.granjas$dic$dic, m2.granjas$dic$dic, m3.granjas$dic$dic),
+
+                        WAIC = c(m1.granjas$waic$waic, m2.granjas$waic$waic, m3.granjas$waic$waic),
+
+                        LCPO = c(-mean(log(m1.granjas$cpo$cpo)),
+
+                                 -mean(log(m2.granjas$cpo$cpo)),
+
+                                 -mean(log(m3.granjas$cpo$cpo))))
+
+rownames(seleccion.granjas.inla)<- c("M1: periodo (num)", "M2: periodo (factor)", "M3: periodo + granja (ea)")
+
+seleccion.granjas.inla
+
+
+```
+
+Como se ha ido comprobando, se concluye que el modelo en el que incluimos el efecto aleatorio de cada granja muestreada funciona mejor en base al ajuste y la predicción.
 
 
 
